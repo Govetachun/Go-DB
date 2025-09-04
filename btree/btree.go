@@ -90,7 +90,7 @@ func (node BNode) setPtr(index uint16, val uint64) {
 func (node BNode) getOffset(idx uint16) uint16 {
 	utils.Assert(idx >= node.nkeys(), "Index out of bounds")
 	if idx == 0 {
-		return 0
+		return 0 // idx=0: Always returns 0 (special case)
 	}
 	pos := HEADER + node.nkeys()*8 + (idx-1)*2
 	return binary.LittleEndian.Uint16(node[pos:])
