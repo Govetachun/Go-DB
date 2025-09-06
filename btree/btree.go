@@ -5,25 +5,7 @@ import (
 	"govetachun/go-mini-db/utils"
 )
 
-const (
-	BNODE_NODE = 1 //internal nodes with pointers
-	BNODE_LEAF = 2 // leaf nodes with values
-)
 
-// size constraints
-const BTREE_PAGE_SIZE = 4096
-const BTREE_MAX_KEY_SIZE = 1000
-const BTREE_MAX_VAL_SIZE = 3000
-
-const HEADER = 4 // type and nkeys
-
-type Node struct {
-	keys [][]byte
-
-	vals [][]byte
-
-	children []*Node
-}
 
 func init() {
 	// | type | nkeys |  pointers  |  offsets   | key-values | unused |
@@ -40,20 +22,6 @@ func init() {
 		panic("Exceeded page size!")
 	}
 }
-
-type BTree struct {
-	// root pointer (a nonzero page number)
-	root uint64
-	// callbacks for managing on-disk pages
-	get func(uint64) BNode // read data from a page number, dereference a pointer
-	new func(BNode) uint64 // allocate a new page number with data
-	del func(uint64)       // deallocate a page number
-}
-
-type BNode struct {
-	data []byte // can be dumped to the disk
-}
-
 // / header
 // Read the fixed-size header.
 func (node BNode) btype() uint16 {

@@ -7,8 +7,6 @@ import (
 	"fmt"
 )
 
-const DB_SIG = "BuildYourOwnDB06" // not compatible between chapters
-
 // the master page format.
 // it contains the pointer to the root and other important bits.
 // | sig | btree_root | page_used |

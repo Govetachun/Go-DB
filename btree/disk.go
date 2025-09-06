@@ -33,26 +33,7 @@ func mmapInit(fp *os.File) (int, []byte, error) {
 	return int(fi.Size()), chunk, nil
 }
 
-type KV struct {
-	Path string
-	// internals
-	fp   *os.File
-	tree BTree
-	mmap struct {
-		file   int      // file size, can be larger than the database size
-		total  int      // mmap size, can be larger than the file size
-		chunks [][]byte // multiple mmaps, can be non-continuous
-	}
-	page struct {
-		flushed uint64 // database size in number of pages
-		nfree   int    // number of pages taken from the free list
-		nappend int    // number of pages to be appended
-		// newly allocated or deallocated pages keyed by the pointer.
-		// nil value denotes a deallocated page.
-		updates map[uint64][]byte
-	}
-	free FreeList
-}
+
 
 // extend the mmap by adding new mappings.
 
