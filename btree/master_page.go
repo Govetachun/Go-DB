@@ -7,7 +7,6 @@ import (
 	"fmt"
 )
 
-
 const DB_SIG = "BuildYourOwnDB06" // not compatible between chapters
 
 // the master page format.
@@ -36,6 +35,7 @@ func masterLoad(db *KV) error {
 	db.page.flushed = used
 	return nil
 }
+
 // update the master page. it must be atomic.
 func masterStore(db *KV) error {
 	var data [32]byte
@@ -46,7 +46,7 @@ func masterStore(db *KV) error {
 	// Use the `pwrite()` syscall instead.
 	_, err := db.fp.WriteAt(data[:], 0)
 	if err != nil {
-	return fmt.Errorf("write master page: %w", err)
+		return fmt.Errorf("write master page: %w", err)
 	}
 	return nil
-	}
+}
