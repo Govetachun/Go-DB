@@ -40,7 +40,7 @@ func treeDelete(tree *BTree, node BNode, key []byte) BNode {
 func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 	// recurse into the kid
 	kptr := node.getPtr(idx)
-	updated := treeDelete(tree, BNode{data: tree.get(kptr)}, key)
+	updated := treeDelete(tree, tree.get(kptr), key)
 	if len(updated.data) == 0 {
 		return BNode{} // not found
 	}
@@ -54,12 +54,12 @@ func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
 		merged := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
 		nodeMerge(merged, sibling, updated)
 		tree.del(node.getPtr(idx - 1))
-		nodeReplace2Kid(new, node, idx-1, tree.new(merged.data), merged.getKey(0))
+		nodeReplace2Kid(new, node, idx-1, tree.new(merged), merged.getKey(0))
 	case mergeDir > 0: // right
 		merged := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
 		nodeMerge(merged, updated, sibling)
 		tree.del(node.getPtr(idx + 1))
-		nodeReplace2Kid(new, node, idx, tree.new(merged.data), merged.getKey(0))
+		nodeReplace2Kid(new, node, idx, tree.new(merged), merged.getKey(0))
 	case mergeDir == 0:
 		utils.Assert(updated.nkeys() > 0, "updated.nkeys() > 0") // no merge
 		nodeReplaceKidN(tree, new, node, idx, updated)
@@ -80,16 +80,16 @@ func shouldMerge(
 	}
 	if idx > 0 {
 		sibling := tree.get(node.getPtr(idx - 1))
-		merged := BNode{data: sibling}.nbytes() + updated.nbytes() - HEADER
+		merged := sibling.nbytes() + updated.nbytes() - HEADER
 		if merged <= BTREE_PAGE_SIZE {
-			return -1, BNode{data: sibling}
+			return -1, sibling
 		}
 	}
 	if idx+1 < node.nkeys() {
 		sibling := tree.get(node.getPtr(idx + 1))
-		merged := BNode{data: sibling}.nbytes() + updated.nbytes() - HEADER
+		merged := sibling.nbytes() + updated.nbytes() - HEADER
 		if merged <= BTREE_PAGE_SIZE {
-			return +1, BNode{data: sibling}
+			return +1, sibling
 		}
 	}
 	return 0, BNode{}
@@ -106,9 +106,8 @@ func checkLimit(key []byte, val []byte) error {
 	return nil
 }
 
-
 // delete a key and returns whether the key was there
-func (tree *BTree) Delete(key []byte) (bool) {
+func (tree *BTree) Delete(key []byte) bool {
 	if tree.root == 0 {
 		return false
 	}
@@ -119,7 +118,7 @@ func (tree *BTree) Delete(key []byte) (bool) {
 	}
 
 	// perform deletion
-	updated := treeDelete(tree, BNode{data: tree.get(tree.root)}, key)
+	updated := treeDelete(tree, tree.get(tree.root), key)
 	if len(updated.data) == 0 {
 		return false // key not found
 	}
@@ -129,7 +128,7 @@ func (tree *BTree) Delete(key []byte) (bool) {
 	if updated.btype() == BNODE_NODE && updated.nkeys() == 1 {
 		tree.root = updated.getPtr(0)
 	} else {
-		tree.root = tree.new(updated.data)
+		tree.root = tree.new(updated)
 	}
 	return true
 }
@@ -150,36 +149,37 @@ func (tree *BTree) Insert(key []byte, val []byte) error {
 		// thus a lookup can always find a containing node.
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
-		tree.root = tree.new(root.data)
+		tree.root = tree.new(root)
 		return nil
 	}
 
-	node := BNode{data: tree.get(tree.root)}
+	node := tree.get(tree.root)
 	tree.del(tree.root)
 	// 3. insert the key
-	node = treeInsert(tree, node, key, val)	
+	node = treeInsert(tree, node, key, val)
 	// 4. grow the tree if the root is split
 	nsplit, split := nodeSplit3(node)
 	if nsplit > 1 { // the root was split, add a new level.
 		root := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
 		root.setHeader(BNODE_NODE, nsplit)
 		for i, knode := range split[:nsplit] {
-			ptr, key := tree.new(knode.data), knode.getKey(0)
+			ptr, key := tree.new(knode), knode.getKey(0)
 			nodeAppendKV(root, uint16(i), ptr, key, nil)
 		}
-		tree.root = tree.new(root.data)
+		tree.root = tree.new(root)
 	} else {
-		tree.root = tree.new(split[0].data)
+		tree.root = tree.new(split[0])
 	}
 	return nil
 }
+
 // get a key and returns whether the key was there
 func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	if tree.root == 0 {
 		return nil, false
 	}
 
-	node := BNode{data: tree.get(tree.root)}
+	node := tree.get(tree.root)
 	idx := nodeLookupLE(node, key)
 
 	// check if key exists

@@ -16,19 +16,18 @@ func newC() *C {
 	pages := map[uint64]BNode{}
 	return &C{
 		tree: BTree{
-			get: func(ptr uint64) []byte {
+			get: func(ptr uint64) BNode {
 				node, ok := pages[ptr]
 				utils.Assert(ok, "node not found")
-				return node.data
+				return node
 			},
-			new: func(data []byte) uint64 {
-				node := BNode{data: data}
-				utils.Assert(node.nbytes() <= BTREE_PAGE_SIZE, "node too large")
-				key := uint64(uintptr(unsafe.Pointer(&data[0])))
-				utils.Assert(len(pages[key].data) == 0, "node already exists")
-				pages[key] = node
-				return key
-			},
+			new: func(node BNode) uint64 {
+                utils.Assert(node.nbytes() <= BTREE_PAGE_SIZE, "node too large")
+                key := uint64(uintptr(unsafe.Pointer(&node.data[0])))
+                utils.Assert(pages[key].data == nil, "node already exists")
+                pages[key] = node
+                return key
+                },
 
 			del: func(ptr uint64) {
 				_, ok := pages[ptr]

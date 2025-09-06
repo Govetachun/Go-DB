@@ -23,11 +23,8 @@ func (db *KV) Open() error {
 	db.mmap.total = len(chunk)
 	db.mmap.chunks = [][]byte{chunk}
 	// btree callbacks
-	db.tree.get = db.pageRead
-	db.tree.new = func(data []byte) uint64 { // Wrapper to convert []byte to BNode
-		node := BNode{data: data}
-		return db.pageNew(node)
-	}
+	db.tree.get = db.pageGet
+	db.tree.new = db.pageNew
 	db.tree.del = db.pageDel
 	// read the master page
 	err = masterLoad(db)

@@ -118,7 +118,7 @@ func treeInsert(tree *BTree, node BNode, key []byte, val []byte) BNode {
 func nodeInsert(tree *BTree, new BNode, node BNode, idx uint16, key []byte, val []byte) {
 	// get and deallocate the kid node
 	kptr := node.getPtr(idx)
-	knode := BNode{data: tree.get(kptr)}
+	knode := tree.get(kptr)
 	tree.del(kptr)
 	//recursively insert the key into the kid node
 	knode = treeInsert(tree, knode, key, val)
@@ -187,7 +187,7 @@ func nodeReplaceKidN(
 	new.setHeader(BNODE_NODE, old.nkeys()+inc-1)
 	nodeAppendRange(new, old, 0, 0, idx)
 	for i, node := range kids {
-		nodeAppendKV(new, idx+uint16(i), tree.new(node.data), node.getKey(0), nil)
+		nodeAppendKV(new, idx+uint16(i), tree.new(node), node.getKey(0), nil)
 	}
 	nodeAppendRange(new, old, idx+inc, idx+1, old.nkeys()-(idx+1))
 }
