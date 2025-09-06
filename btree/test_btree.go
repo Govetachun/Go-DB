@@ -1,52 +1,57 @@
 package btree
 
 import (
+	"fmt"
 	"govetachun/go-mini-db/utils"
 	"unsafe"
-	"fmt"
 )
 
 type C struct {
-    tree  BTree
-    ref   map[string]string // the reference data
-    pages map[uint64]BNode  // in-memory pages
+	tree  BTree
+	ref   map[string]string // the reference data
+	pages map[uint64]BNode  // in-memory pages
 }
 
 func newC() *C {
-    pages := map[uint64]BNode{}
-    return &C{
-        tree: BTree{
-            get: func(ptr uint64) []byte {
-                node, ok := pages[ptr]
-                utils.Assert(ok, "node not found")
-                return node
-            },
-            new: func(node []byte) uint64 {
-                utils.Assert(BNode(node).nbytes() <= BTREE_PAGE_SIZE, "node size exceeds page size")
-                ptr := uint64(uintptr(unsafe.Pointer(&node[0])))
-                utils.Assert(pages[ptr] == nil, "node already exists")
-                pages[ptr] = node
-                return ptr
-            },
-            del: func(ptr uint64) {
-                utils.Assert(pages[ptr] != nil, "node not found")
-                delete(pages, ptr)
-            },
-        },
-        ref:   map[string]string{},
-        pages: pages,
-    }
+	pages := map[uint64]BNode{}
+	return &C{
+		tree: BTree{
+			get: func(ptr uint64) []byte {
+				node, ok := pages[ptr]
+				utils.Assert(ok, "node not found")
+				return node.data
+			},
+			new: func(data []byte) uint64 {
+				node := BNode{data: data}
+				utils.Assert(node.nbytes() <= BTREE_PAGE_SIZE, "node too large")
+				key := uint64(uintptr(unsafe.Pointer(&data[0])))
+				utils.Assert(len(pages[key].data) == 0, "node already exists")
+				pages[key] = node
+				return key
+			},
+
+			del: func(ptr uint64) {
+				_, ok := pages[ptr]
+				utils.Assert(ok, "node not found")
+				delete(pages, ptr)
+			},
+		},
+		ref:   map[string]string{},
+		pages: pages,
+	}
 }
 
-func (c *C) Add(key string, val string) {
+func (c *C) add(key string, val string) {
 	c.tree.Insert([]byte(key), []byte(val))
 	c.ref[key] = val
 }
 
-func (c *C) Del(key string) bool {
-	delete(c.ref, key)
-	_, err := c.tree.Delete([]byte(key))
-	return err == nil
+func (c *C) del(key string) bool {
+	found := c.tree.Delete([]byte(key))
+	if found {
+		delete(c.ref, key)
+	}
+	return found
 }
 
 func (c *C) PrintTree() {

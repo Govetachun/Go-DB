@@ -6,6 +6,95 @@ import (
 	"govetachun/go-mini-db/utils"
 )
 
+// remove a key from a leaf node
+func leafDelete(new BNode, old BNode, idx uint16) {
+	new.setHeader(BNODE_LEAF, old.nkeys()-1)
+	nodeAppendRange(new, old, 0, 0, idx)                       // copy keys before idx
+	nodeAppendRange(new, old, idx, idx+1, old.nkeys()-(idx+1)) // copy keys after idx
+}
+
+// delete a key from the tree
+func treeDelete(tree *BTree, node BNode, key []byte) BNode {
+	// find the key position
+	idx := nodeLookupLE(node, key)
+
+	switch node.btype() {
+	case BNODE_LEAF:
+		if !bytes.Equal(key, node.getKey(idx)) {
+			return BNode{} // not found
+		}
+		// delete the key in the leaf node
+		new := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
+		leafDelete(new, node, idx)
+		return new
+
+	case BNODE_NODE:
+		// recursively delete from child
+		return nodeDelete(tree, node, idx, key)
+	default:
+		panic("invalid node type")
+	}
+}
+
+// delete a key from an internal node; part of the treeDelete()
+func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
+	// recurse into the kid
+	kptr := node.getPtr(idx)
+	updated := treeDelete(tree, BNode{data: tree.get(kptr)}, key)
+	if len(updated.data) == 0 {
+		return BNode{} // not found
+	}
+	tree.del(kptr)
+
+	// check for merging
+	new := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
+	mergeDir, sibling := shouldMerge(tree, node, idx, updated)
+	switch {
+	case mergeDir < 0: // left
+		merged := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
+		nodeMerge(merged, sibling, updated)
+		tree.del(node.getPtr(idx - 1))
+		nodeReplace2Kid(new, node, idx-1, tree.new(merged.data), merged.getKey(0))
+	case mergeDir > 0: // right
+		merged := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
+		nodeMerge(merged, updated, sibling)
+		tree.del(node.getPtr(idx + 1))
+		nodeReplace2Kid(new, node, idx, tree.new(merged.data), merged.getKey(0))
+	case mergeDir == 0:
+		utils.Assert(updated.nkeys() > 0, "updated.nkeys() > 0") // no merge
+		nodeReplaceKidN(tree, new, node, idx, updated)
+	}
+	return new
+}
+
+// The conditions for merging are:
+// 1. The node is smaller than 1/4 of a page (this is arbitrary).
+// 2. Has a sibling and the merged result does not exceed one page.
+// should the updated kid be merged with a sibling?
+func shouldMerge(
+	tree *BTree, node BNode,
+	idx uint16, updated BNode,
+) (int, BNode) {
+	if updated.nbytes() > BTREE_PAGE_SIZE/4 {
+		return 0, BNode{}
+	}
+	if idx > 0 {
+		sibling := tree.get(node.getPtr(idx - 1))
+		merged := BNode{data: sibling}.nbytes() + updated.nbytes() - HEADER
+		if merged <= BTREE_PAGE_SIZE {
+			return -1, BNode{data: sibling}
+		}
+	}
+	if idx+1 < node.nkeys() {
+		sibling := tree.get(node.getPtr(idx + 1))
+		merged := BNode{data: sibling}.nbytes() + updated.nbytes() - HEADER
+		if merged <= BTREE_PAGE_SIZE {
+			return +1, BNode{data: sibling}
+		}
+	}
+	return 0, BNode{}
+}
+
 // checkLimit validates key and value sizes
 func checkLimit(key []byte, val []byte) error {
 	if len(key) > BTREE_MAX_KEY_SIZE {
@@ -17,6 +106,36 @@ func checkLimit(key []byte, val []byte) error {
 	return nil
 }
 
+
+// delete a key and returns whether the key was there
+func (tree *BTree) Delete(key []byte) (bool) {
+	if tree.root == 0 {
+		return false
+	}
+
+	// check key size limit
+	if err := checkLimit(key, nil); err != nil {
+		return false
+	}
+
+	// perform deletion
+	updated := treeDelete(tree, BNode{data: tree.get(tree.root)}, key)
+	if len(updated.data) == 0 {
+		return false // key not found
+	}
+
+	// update root if needed
+	tree.del(tree.root)
+	if updated.btype() == BNODE_NODE && updated.nkeys() == 1 {
+		tree.root = updated.getPtr(0)
+	} else {
+		tree.root = tree.new(updated.data)
+	}
+	return true
+}
+
+// 1. A new root node is created when the old root is split into multiple nodes.
+// 2. When inserting the first key, create the first leaf node as the root.
 // insert a new key or update an existing key
 func (tree *BTree) Insert(key []byte, val []byte) error {
 	// 1. check the length limit imposed by the node format
@@ -25,66 +144,42 @@ func (tree *BTree) Insert(key []byte, val []byte) error {
 	}
 	// 2. create the first node
 	if tree.root == 0 {
-		root := BNode(make([]byte, BTREE_PAGE_SIZE))
+		root := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
 		root.setHeader(BNODE_LEAF, 2)
 		// a dummy key, this makes the tree cover the whole key space.
 		// thus a lookup can always find a containing node.
 		nodeAppendKV(root, 0, 0, nil, nil)
 		nodeAppendKV(root, 1, 0, key, val)
-		tree.root = tree.new(root)
+		tree.root = tree.new(root.data)
 		return nil
 	}
+
+	node := BNode{data: tree.get(tree.root)}
+	tree.del(tree.root)
 	// 3. insert the key
-	node := treeInsert(tree, tree.get(tree.root), key, val)
+	node = treeInsert(tree, node, key, val)	
 	// 4. grow the tree if the root is split
 	nsplit, split := nodeSplit3(node)
-	tree.del(tree.root)
 	if nsplit > 1 { // the root was split, add a new level.
-		root := BNode(make([]byte, BTREE_PAGE_SIZE))
+		root := BNode{data: make([]byte, BTREE_PAGE_SIZE)}
 		root.setHeader(BNODE_NODE, nsplit)
 		for i, knode := range split[:nsplit] {
-			ptr, key := tree.new(knode), knode.getKey(0)
+			ptr, key := tree.new(knode.data), knode.getKey(0)
 			nodeAppendKV(root, uint16(i), ptr, key, nil)
 		}
+		tree.root = tree.new(root.data)
+	} else {
+		tree.root = tree.new(split[0].data)
 	}
 	return nil
 }
-
-// delete a key and returns whether the key was there
-func (tree *BTree) Delete(key []byte) (bool, error) {
-	if tree.root == 0 {
-		return false, nil
-	}
-
-	// check key size limit
-	if err := checkLimit(key, nil); err != nil {
-		return false, err
-	}
-
-	// perform deletion
-	node := treeDelete(tree, tree.get(tree.root), key)
-	if len(node) == 0 {
-		return false, nil // key not found
-	}
-
-	// update root if needed
-	tree.del(tree.root)
-	if node.nkeys() == 0 {
-		tree.root = 0 // tree is now empty
-	} else {
-		tree.root = tree.new(node)
-	}
-
-	return true, nil
-}
-
 // get a key and returns whether the key was there
 func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	if tree.root == 0 {
 		return nil, false
 	}
 
-	node := BNode(tree.get(tree.root))
+	node := BNode{data: tree.get(tree.root)}
 	idx := nodeLookupLE(node, key)
 
 	// check if key exists
@@ -93,13 +188,6 @@ func (tree *BTree) Get(key []byte) ([]byte, bool) {
 	}
 
 	return nil, false
-}
-
-// remove a key from a leaf node
-func leafDelete(new BNode, old BNode, idx uint16) {
-	new.setHeader(BNODE_LEAF, old.nkeys()-1)
-	nodeAppendRange(new, old, 0, 0, idx)                       // copy keys before idx
-	nodeAppendRange(new, old, idx, idx+1, old.nkeys()-(idx+1)) // copy keys after idx
 }
 
 // merge 2 nodes into 1
@@ -115,83 +203,4 @@ func nodeReplace2Kid(new BNode, old BNode, idx uint16, ptr uint64, key []byte) {
 	nodeAppendRange(new, old, 0, 0, idx)                         // copy keys before idx
 	nodeAppendKV(new, idx, ptr, key, nil)                        // insert the merged node
 	nodeAppendRange(new, old, idx+1, idx+2, old.nkeys()-(idx+2)) // copy keys after idx+1
-}
-
-// should the updated kid be merged with a sibling?
-func shouldMerge(
-	tree *BTree, node BNode, idx uint16, updated BNode,
-) (int, BNode) {
-	if updated.nbytes() > BTREE_PAGE_SIZE/4 {
-		return 0, BNode{}
-	}
-	if idx > 0 {
-		sibling := BNode(tree.get(node.getPtr(idx - 1)))
-		merged := sibling.nbytes() + updated.nbytes() - HEADER
-		if merged <= BTREE_PAGE_SIZE {
-			return -1, sibling // left
-		}
-	}
-	if idx+1 < node.nkeys() {
-		sibling := BNode(tree.get(node.getPtr(idx + 1)))
-		merged := sibling.nbytes() + updated.nbytes() - HEADER
-		if merged <= BTREE_PAGE_SIZE {
-			return +1, sibling // right
-		}
-	}
-	return 0, BNode{}
-}
-
-// delete a key from the tree
-func treeDelete(tree *BTree, node BNode, key []byte) BNode {
-	// find the key position
-	idx := nodeLookupLE(node, key)
-
-	switch node.btype() {
-	case BNODE_LEAF:
-		// check if key exists in leaf
-		if idx >= 0 && idx < node.nkeys() && bytes.Equal(node.getKey(idx), key) {
-			new := BNode(make([]byte, BTREE_PAGE_SIZE))
-			leafDelete(new, node, idx)
-			return new
-		}
-		return BNode{} // key not found
-
-	case BNODE_NODE:
-		// recursively delete from child
-		return nodeDelete(tree, node, idx, key)
-	}
-
-	return BNode{} // should not reach here
-}
-
-// delete a key from an internal node; part of the treeDelete()
-func nodeDelete(tree *BTree, node BNode, idx uint16, key []byte) BNode {
-	// recurse into the kid
-	kptr := node.getPtr(idx)
-	updated := treeDelete(tree, tree.get(kptr), key)
-	if len(updated) == 0 {
-		return BNode{} // not found
-	}
-	tree.del(kptr)
-	// check for merging
-	new := BNode(make([]byte, BTREE_PAGE_SIZE))
-	mergeDir, sibling := shouldMerge(tree, node, idx, updated)
-	switch {
-	case mergeDir < 0: // left
-		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
-		nodeMerge(merged, sibling, updated)
-		tree.del(node.getPtr(idx - 1))
-		nodeReplace2Kid(new, node, idx-1, tree.new(merged), merged.getKey(0))
-	case mergeDir > 0: // right
-		merged := BNode(make([]byte, BTREE_PAGE_SIZE))
-		nodeMerge(merged, updated, sibling)
-		tree.del(node.getPtr(idx + 1))
-		nodeReplace2Kid(new, node, idx, tree.new(merged), merged.getKey(0))
-	case mergeDir == 0 && updated.nkeys() == 0:
-		utils.Assert(node.nkeys() == 1 && idx == 0, "node.nkeys() == 1 && idx == 0") // 1 empty child but no sibling
-		new.setHeader(BNODE_NODE, 0)                                                 // the parent becomes empty too
-	case mergeDir == 0 && updated.nkeys() > 0: // no merge
-		nodeReplaceKidN(tree, new, node, idx, updated)
-	}
-	return new
 }
