@@ -2,8 +2,19 @@ package btree
 
 import (
 	"encoding/binary"
-	"govetachun/go-mini-db/utils"
+	"govetachun/go-mini-db/refactor_code/pkg/utils"
 )
+
+// Import constants from storage package
+const (
+	BNODE_NODE = 1 // internal nodes with pointers
+	BNODE_LEAF = 2 // leaf nodes with values
+)
+
+const BTREE_PAGE_SIZE = 4096
+const BTREE_MAX_KEY_SIZE = 1000
+const BTREE_MAX_VAL_SIZE = 3000
+const HEADER = 4 // type and nkeys
 
 func init() {
 	// | type | nkeys |  pointers  |  offsets   | key-values | unused |
@@ -21,11 +32,17 @@ func init() {
 	}
 }
 
-// / header
+// BNode represents a B-tree node
+type BNode struct {
+	data []byte // can be dumped to the disk
+}
+
+// header operations
 // Read the fixed-size header.
 func (node BNode) btype() uint16 {
 	return binary.LittleEndian.Uint16(node.data[0:2])
 }
+
 func (node BNode) nkeys() uint16 {
 	return binary.LittleEndian.Uint16(node.data[2:4])
 }
@@ -36,20 +53,21 @@ func (node BNode) setHeader(btype uint16, nkeys uint16) {
 	binary.LittleEndian.PutUint16(node.data[2:4], nkeys)
 }
 
-// / pointers
+// pointer operations
 // Read and write child pointers array (for internal nodes).
 func (node BNode) getPtr(index uint16) uint64 {
-	utils.Assert(index >= node.nkeys(), "Index out of bounds")
+	utils.Assert(index < node.nkeys(), "Index out of bounds")
 	pos := HEADER + index*8
 	return binary.LittleEndian.Uint64(node.data[pos:])
 }
+
 func (node BNode) setPtr(index uint16, val uint64) {
-	utils.Assert(index >= node.nkeys(), "Index out of bounds")
+	utils.Assert(index < node.nkeys(), "Index out of bounds")
 	pos := HEADER + index*8
 	binary.LittleEndian.PutUint64(node.data[pos:], val)
 }
 
-// / offsets
+// offset operations
 // offset list
 func offsetPos(node BNode, idx uint16) uint16 {
 	utils.Assert(1 <= idx && idx <= node.nkeys(), "1<=idx && idx <= node.nkeys()")
@@ -71,7 +89,7 @@ func (node BNode) setOffset(idx uint16, val uint16) {
 	binary.LittleEndian.PutUint16(node.data[pos:], val)
 }
 
-// / key-values
+// key-value operations
 // Return the position of the nth key using getOffset().
 func (node BNode) kvPos(idx uint16) uint16 {
 	utils.Assert(idx <= node.nkeys(), "idx <= node.nkeys()")
@@ -80,7 +98,7 @@ func (node BNode) kvPos(idx uint16) uint16 {
 
 // Get the nth key data as a slice.
 func (node BNode) getKey(idx uint16) []byte {
-	utils.Assert(idx <= node.nkeys(), "idx <= node.nkeys()")
+	utils.Assert(idx < node.nkeys(), "idx < node.nkeys()")
 	pos := node.kvPos(idx)
 	klen := binary.LittleEndian.Uint16(node.data[pos:])
 	return node.data[pos+4:][:klen]
@@ -88,7 +106,7 @@ func (node BNode) getKey(idx uint16) []byte {
 
 // Get the nth value data as a slice (for leaf nodes).
 func (node BNode) getVal(idx uint16) []byte {
-	utils.Assert(idx <= node.nkeys(), "idx <= node.nkeys()")
+	utils.Assert(idx < node.nkeys(), "idx < node.nkeys()")
 	pos := node.kvPos(idx)
 	klen := binary.LittleEndian.Uint16(node.data[pos+0:])
 	vlen := binary.LittleEndian.Uint16(node.data[pos+2:])
